@@ -10,11 +10,16 @@ namespace LunarEyes.Interaction
     public class PlayerInteractor : MonoBehaviour
     {
         [SerializeField] ThirdPersonCamera playerCamera;
+        [Header("Som")]
+        [SerializeField] AudioSource uiAudio;
+        [SerializeField] AudioClip promptClip;
+        [SerializeField] AudioClip confirmClip;
 
         public PlayerController Controller { get; private set; }
         public ThirdPersonCamera Camera => playerCamera;
 
         Interactable current;
+        Interactable lastPrompted;
 
         void Awake()
         {
@@ -25,14 +30,25 @@ namespace LunarEyes.Interaction
         void Update()
         {
             current = Controller.IsLocked ? null : FindBest();
-            HUD.Instance?.SetPrompt(current != null ? $"[E]  {current.Prompt}" : null);
+            if (current != null) HUD.Instance?.SetPrompt(current.Prompt, current.Subtitle);
+            else HUD.Instance?.SetPrompt(null);
+
+            // Tique discreto só quando um novo prompt aparece
+            if (current != null && current != lastPrompted) Play(promptClip, 0.35f);
+            lastPrompted = current;
 
             if (current != null && Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
             {
                 var target = current;
                 HUD.Instance?.SetPrompt(null);
+                Play(confirmClip, 0.5f);
                 target.Interact(this);
             }
+        }
+
+        void Play(AudioClip clip, float volume)
+        {
+            if (uiAudio != null && clip != null) uiAudio.PlayOneShot(clip, volume);
         }
 
         Interactable FindBest()

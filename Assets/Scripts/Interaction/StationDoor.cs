@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using UnityEngine;
 
@@ -6,6 +7,9 @@ namespace LunarEyes.Interaction
     /// <summary>Porta da estação: o astronauta toca a animação de abrir e o painel desliza para dentro da parede.</summary>
     public class StationDoor : Interactable
     {
+        /// <summary>Disparado quando a porta acaba de abrir.</summary>
+        public static event Action<StationDoor> Opened;
+
         [SerializeField] Transform panel;
         [Tooltip("Deslocamento local do painel quando aberto.")]
         [SerializeField] Vector3 openOffset = new Vector3(3.4f, 0f, 0f);
@@ -26,6 +30,7 @@ namespace LunarEyes.Interaction
         }
 
         public override string Prompt => "Abrir porta da estação";
+        public override string Subtitle => "Módulo de observação";
         public override bool CanInteract(PlayerInteractor player) => !isOpen && !isMoving;
 
         public override void Interact(PlayerInteractor player)
@@ -56,6 +61,7 @@ namespace LunarEyes.Interaction
             if (panel != null) panel.localPosition = to;
             isOpen = true;
             isMoving = false;
+            Opened?.Invoke(this);
         }
     }
 }

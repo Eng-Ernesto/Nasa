@@ -28,8 +28,11 @@ namespace LunarEyes.Player
         void Start()
         {
             if (target != null) yaw = target.eulerAngles.y;
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
+            if (overridePoint == null)
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
         }
 
         public void SetOverride(Transform point)

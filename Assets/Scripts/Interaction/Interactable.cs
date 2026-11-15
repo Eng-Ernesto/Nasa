@@ -14,6 +14,8 @@ namespace LunarEyes.Interaction
         [SerializeField] protected Transform standPoint;
 
         public virtual string Prompt => prompt;
+        /// <summary>Linha secundária do prompt (ex.: onde fica). Vazio = sem subtítulo.</summary>
+        public virtual string Subtitle => null;
         public float Radius => radius;
         public Vector3 Anchor => standPoint != null ? standPoint.position : transform.position;
 

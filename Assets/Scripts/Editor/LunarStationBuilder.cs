@@ -68,7 +68,7 @@ namespace LunarEyes.EditorTools
             var station = BuildStation(out var door, out var terminal);
             var cam = BuildCamera();
             var player = BuildPlayer(controller, cam, useV2);
-            BuildHUD();
+            GameUIBuilder.Build(cam, player, door, terminal);
             BuildPostProcessing();
 
             EditorSceneManager.SaveScene(scene, ScenePath);
@@ -510,6 +510,12 @@ namespace LunarEyes.EditorTools
             door = BuildDoor(root, doorway);
             terminal = BuildTerminal(root, props);
 
+            // Zumbido baixo dos equipamentos, só audível dentro da sala
+            var hum = NewAudio(root, "Station Ambience", new Vector3(0f, 2.5f, 26f), true, 0.22f, 5f, 11f);
+            hum.clip = Sfx("Station/Hum");
+            hum.playOnAwake = true;
+            hum.gameObject.AddComponent<StationAmbience>();
+
             AddMeshColliders(shell.gameObject);
             Log.AppendLine("Porta (DoorWay) bounds: " + GetBounds(doorway).ToString("F2"));
             return root.gameObject;
@@ -535,7 +541,7 @@ namespace LunarEyes.EditorTools
             stand.localPosition = new Vector3(0f, 0f, -1.6f);
 
             var audio = go.AddComponent<AudioSource>();
-            audio.clip = AssetDatabase.LoadAssetAtPath<AudioClip>(KitFolder + "Sounds/Pneumatic-door.wav");
+            audio.clip = Sfx("Station/DoorOpen");
             audio.playOnAwake = false;
             audio.spatialBlend = 1f;
             audio.minDistance = 2f;
@@ -634,6 +640,17 @@ namespace LunarEyes.EditorTools
             SetRef(terminal, "screenIdle", idle.gameObject);
             SetRef(terminal, "screenActive", active.gameObject);
             SetFloat(terminal, "radius", 2.2f);
+
+            // Som do terminal: one-shots (ligar, alerta, desligar) e o ruído do computador em loop enquanto está aberto
+            var termSfx = NewAudio(go.transform, "Terminal SFX", screenPos, false, 0.7f, 2f, 15f);
+            var termLoop = NewAudio(go.transform, "Terminal Loop", screenPos, true, 0.12f, 1.5f, 8f);
+            termLoop.clip = Sfx("Station/ComputerLoop");
+            termLoop.playOnAwake = false;
+            SetRef(terminal, "sfx", termSfx);
+            SetRef(terminal, "computerLoop", termLoop);
+            SetRef(terminal, "onClip", Sfx("UI/TerminalOn"));
+            SetRef(terminal, "offClip", Sfx("UI/TerminalOff"));
+            SetRef(terminal, "alertClip", Sfx("UI/Alert"));
             return terminal;
         }
 
@@ -655,10 +672,17 @@ namespace LunarEyes.EditorTools
         {
             var root = Panel(canvas, "Screen Active", ScreenBg);
 
+            // O conteúdo da missão abre na aplicação web; o ecrã do mundo só mostra que está ligado.
             var header = Box(root, "Header", new Vector2(0f, 0.86f), new Vector2(1f, 1f), new Color(0.05f, 0.12f, 0.18f, 1f));
-            var pill = Box(header, "Alert Pill", new Vector2(0.015f, 0.18f), new Vector2(0.2f, 0.82f), Alert);
-            LabelAt(pill, "ALERTA", 56, TextAnchor.MiddleCenter, new Color(0.08f, 0.06f, 0.02f), Vector2.zero, Vector2.one, true);
-            LabelAt(header, "MISSÃO 01  ·  ANGOLA", 56, TextAnchor.MiddleLeft, Accent, new Vector2(0.23f, 0f), Vector2.one, true);
+            LabelAt(header, "LUNAR EYES  ·  TERMINAL LIGADO", 62, TextAnchor.MiddleLeft, Accent, Vector2.zero, Vector2.one, true);
+            LabelAt(root, "A abrir a aplicação Lunar Eyes…", 100, TextAnchor.MiddleCenter, TextMain, new Vector2(0f, 0.3f), new Vector2(1f, 0.7f), true);
+            return root;
+        }
+
+        static RectTransform BuildScreenActiveLegacy(RectTransform canvas)
+        {
+            var root = Panel(canvas, "Screen Active (legacy)", ScreenBg);
+            var header = Box(root, "Header", new Vector2(0f, 0.86f), new Vector2(1f, 1f), new Color(0.05f, 0.12f, 0.18f, 1f));
 
             LabelAt(root, "Sul de Angola — possível seca 2018/19", 72, TextAnchor.MiddleLeft, TextMain, new Vector2(0f, 0.68f), new Vector2(1f, 0.84f), true);
 
@@ -784,8 +808,10 @@ namespace LunarEyes.EditorTools
                     c.lockRootHeightY = true;
                     c.keepOriginalPositionY = false;
                     c.heightFromFeet = true;
-                    c.lockRootPositionXZ = true;
-                    c.keepOriginalPositionXZ = true;
+                    // Walk/Run do Mixamo não vêm "In Place": se o deslocamento XZ ficasse na pose,
+                    // o corpo avançava e voltava atrás em cada ciclo. Sem bake, vai para root motion,
+                    // que o Animator descarta (applyRootMotion = false); quem move é o PlayerController.
+                    c.lockRootPositionXZ = false;
                 }
                 mi.clipAnimations = clips;
                 mi.SaveAndReimport();
@@ -801,6 +827,31 @@ namespace LunarEyes.EditorTools
             return null;
         }
 
+        const float WalkSpeed = 1.4f;
+        const float RunSpeed = 4.0f;
+        const float PlayerHeight = 1.83f;
+
+        /// <summary>Velocidade de avanço do clip no astronauta à escala do jogo (m/s), medida pela anca.</summary>
+        static float ClipForwardSpeed(AnimationClip clip)
+        {
+            if (clip == null) return 0f;
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(AstronautV2Fbx);
+            var go = Object.Instantiate(prefab);
+            try
+            {
+                go.transform.position = new Vector3(500f, 0f, 500f);
+                float h = GetBounds(go).size.y;
+                go.transform.localScale = Vector3.one * (PlayerHeight / h);
+                var hips = go.GetComponent<Animator>().GetBoneTransform(HumanBodyBones.Hips);
+                clip.SampleAnimation(go, 0f);
+                Vector3 a = hips.position;
+                clip.SampleAnimation(go, clip.length);
+                Vector3 b = hips.position;
+                return new Vector2(b.x - a.x, b.z - a.z).magnitude / clip.length;
+            }
+            finally { Object.DestroyImmediate(go); }
+        }
+
         static AnimatorController BuildHumanoidAnimator()
         {
             AssetDatabase.DeleteAsset(HumanoidControllerPath);
@@ -811,9 +862,19 @@ namespace LunarEyes.EditorTools
             tree.blendType = BlendTreeType.Simple1D;
             tree.blendParameter = "Speed";
             tree.useAutomaticThresholds = false;
+            var walk = LoadMixamoClip("Walk");
+            var run = LoadMixamoClip("Run");
             tree.AddChild(LoadMixamoClip("Idle"), 0f);
-            tree.AddChild(LoadMixamoClip("Walk"), 2.2f);
-            tree.AddChild(LoadMixamoClip("Run"), 4.5f);
+            tree.AddChild(walk, WalkSpeed);
+            tree.AddChild(run, RunSpeed);
+
+            // Acerta a cadência dos passos à velocidade real do jogador (evita pés a deslizar)
+            float walkAnim = ClipForwardSpeed(walk), runAnim = ClipForwardSpeed(run);
+            var children = tree.children;
+            if (walkAnim > 0.01f) children[1].timeScale = Mathf.Clamp(WalkSpeed / walkAnim, 0.6f, 2f);
+            if (runAnim > 0.01f) children[2].timeScale = Mathf.Clamp(RunSpeed / runAnim, 0.6f, 2f);
+            tree.children = children;
+            Log.AppendLine($"Passada: walk {walkAnim:F2} m/s (x{children[1].timeScale:F2}), run {runAnim:F2} m/s (x{children[2].timeScale:F2}).");
             sm.defaultState = loco;
             foreach (var name in new[] { "OpenDoor", "Interact" })
                 sm.AddState(name).motion = LoadMixamoClip(name);
@@ -912,9 +973,30 @@ namespace LunarEyes.EditorTools
             var pc = player.AddComponent<PlayerController>();
             SetRef(pc, "animator", animator);
             SetRef(pc, "cameraTransform", cam.transform);
+            if (useV2)
+            {
+                SetFloat(pc, "walkSpeed", WalkSpeed);
+                SetFloat(pc, "runSpeed", RunSpeed);
+            }
 
             var pi = player.AddComponent<PlayerInteractor>();
             SetRef(pi, "playerCamera", cam);
+
+            // Passos (3D leve, junto aos pés) e sons de interface (2D)
+            var feetAudio = NewAudio(player.transform, "Footsteps", player.transform.position + Vector3.up * 0.1f, false, 1f, 1f, 12f);
+            feetAudio.spatialBlend = 0.5f;
+            var steps = player.AddComponent<FootstepAudio>();
+            SetRef(steps, "source", feetAudio);
+            SetClips(steps, "regolith", "Footsteps/Regolith_");
+            SetClips(steps, "metal", "Footsteps/Metal_");
+            SetFloat(steps, "walkSpeed", WalkSpeed);
+            SetFloat(steps, "runSpeed", RunSpeed);
+
+            var uiAudio = NewAudio(player.transform, "UI Audio", player.transform.position, false, 1f, 1f, 5f);
+            uiAudio.spatialBlend = 0f;
+            SetRef(pi, "uiAudio", uiAudio);
+            SetRef(pi, "promptClip", Sfx("UI/Prompt"));
+            SetRef(pi, "confirmClip", Sfx("UI/Confirm"));
 
             cam.Target = player.transform;
             var so = new SerializedObject(cam);
@@ -1060,6 +1142,48 @@ namespace LunarEyes.EditorTools
             if (p == null) { Log.AppendLine("AVISO: campo em falta " + target.GetType().Name + "." + field); return; }
             p.objectReferenceValue = value;
             so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        const string SfxFolder = "Assets/Audio/SFX/";
+
+        static AudioClip Sfx(string name)
+        {
+            var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(SfxFolder + name + ".ogg");
+            if (clip == null) Log.AppendLine("AVISO: som em falta: " + name);
+            return clip;
+        }
+
+        static AudioSource NewAudio(Transform parent, string name, Vector3 position, bool loop, float volume, float minDist, float maxDist)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent);
+            go.transform.position = position;
+            var a = go.AddComponent<AudioSource>();
+            a.playOnAwake = false;
+            a.loop = loop;
+            a.volume = volume;
+            a.spatialBlend = 1f;
+            a.rolloffMode = AudioRolloffMode.Linear;
+            a.minDistance = minDist;
+            a.maxDistance = maxDist;
+            a.dopplerLevel = 0f;
+            return a;
+        }
+
+        static void SetClips(Object target, string field, string prefix)
+        {
+            var list = new List<AudioClip>();
+            for (int i = 0; i < 10; i++)
+            {
+                var c = AssetDatabase.LoadAssetAtPath<AudioClip>($"{SfxFolder}{prefix}{i:00}.ogg");
+                if (c != null) list.Add(c);
+            }
+            var so = new SerializedObject(target);
+            var p = so.FindProperty(field);
+            p.arraySize = list.Count;
+            for (int i = 0; i < list.Count; i++) p.GetArrayElementAtIndex(i).objectReferenceValue = list[i];
+            so.ApplyModifiedPropertiesWithoutUndo();
+            if (list.Count == 0) Log.AppendLine("AVISO: sem sons " + prefix);
         }
 
         static void SetFloat(Object target, string field, float value)

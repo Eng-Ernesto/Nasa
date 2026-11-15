@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using LunarEyes.UI;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -19,11 +20,23 @@ namespace LunarEyes.Interaction
         [SerializeField] GameObject screenIdle;
         [SerializeField] GameObject screenActive;
 
+        [Header("Som")]
+        [SerializeField] AudioSource sfx;
+        [SerializeField] AudioSource computerLoop;
+        [SerializeField] AudioClip onClip;
+        [SerializeField] AudioClip offClip;
+        [SerializeField] AudioClip alertClip;
+        [SerializeField] float alertDelay = 0.7f;
+
         PlayerInteractor user;
+        Coroutine alertRoutine;
 
         public bool InUse => user != null;
+        /// <summary>Verdadeiro enquanto algum terminal está aberto.</summary>
+        public static bool AnyInUse { get; private set; }
 
         public override string Prompt => "Usar terminal";
+        public override string Subtitle => "Abre a aplicação Lunar Eyes";
         public override bool CanInteract(PlayerInteractor player) => !InUse;
 
         void Start() => SetScreen(false);
@@ -35,8 +48,20 @@ namespace LunarEyes.Interaction
             player.Controller.Lock("Interact");
             if (cameraPoint != null) player.Camera?.SetOverride(cameraPoint);
             SetScreen(true);
-            HUD.Instance?.ShowTerminal(true);
+            AnyInUse = true;
+
+            PlayOneShot(onClip, 0.8f);
+            if (computerLoop != null) computerLoop.Play();
+            alertRoutine = StartCoroutine(AlertAfterDelay());
+
             Opened?.Invoke(this);
+        }
+
+        IEnumerator AlertAfterDelay()
+        {
+            yield return new WaitForSeconds(alertDelay);
+            PlayOneShot(alertClip, 0.7f);
+            alertRoutine = null;
         }
 
         void Update()
@@ -49,12 +74,21 @@ namespace LunarEyes.Interaction
         public void Exit()
         {
             if (user == null) return;
+            if (alertRoutine != null) { StopCoroutine(alertRoutine); alertRoutine = null; }
+            if (computerLoop != null) computerLoop.Stop();
+            PlayOneShot(offClip, 0.7f);
+
             user.Camera?.SetOverride(null);
             user.Controller.Unlock();
             user = null;
             SetScreen(false);
-            HUD.Instance?.ShowTerminal(false);
+            AnyInUse = false;
             Closed?.Invoke(this);
+        }
+
+        void PlayOneShot(AudioClip clip, float volume)
+        {
+            if (sfx != null && clip != null) sfx.PlayOneShot(clip, volume);
         }
 
         void SetScreen(bool active)
